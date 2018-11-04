@@ -1,0 +1,7 @@
+version: "{build}"
+os: Visual Studio 2015
+install:
+    - cmd: packman -S mingw-w64-x86_64-gtk3
+build:
+    - cmd: meson build
+    - cmd: ninja -C build
