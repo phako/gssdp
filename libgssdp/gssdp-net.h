@@ -41,8 +41,8 @@ struct _GSSDPNetworkDevice {
         char *host_ip;
         GInetAddress *host_addr;
         GInetAddressMask *host_mask;
+        GSocketFamily address_family;
         char *network;
-        struct sockaddr_in mask;
         gint index;
 };
 typedef struct _GSSDPNetworkDevice GSSDPNetworkDevice;
@@ -62,5 +62,8 @@ gssdp_net_query_ifindex         (GSSDPNetworkDevice *device);
 G_GNUC_INTERNAL char*
 gssdp_net_mac_lookup            (GSSDPNetworkDevice *device,
                                  const char *ip_address);
+
+G_GNUC_INTERNAL GList*
+gssdp_net_list_devices          (void);
 
 #endif /* GSSDP_NET_H */

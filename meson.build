@@ -1,4 +1,4 @@
-project('GSSDP', 'c', version: '1.1.0')
+project('gssdp', 'c', version: '1.2.4', meson_version : '>= 0.54.0')
 gnome = import('gnome')
 pkg = import('pkgconfig')
 
@@ -9,6 +9,9 @@ conf.set_quoted('VERSION', meson.project_version())
 
 # Check for struct in_pktinfo
 pktinfo_test = '''#define _GNU_SOURCE
+#ifdef __APPLE__
+#define __APPLE_USE_RFC_3542
+#endif
 #include <netinet/ip.h>
 struct in_pktinfo pktinfo;
 struct in6_pktinfo pktinfo6;
@@ -19,17 +22,10 @@ pktinfo_available = cc.compiles(pktinfo_test,
 conf.set('HAVE_PKTINFO', pktinfo_available)
 
 # Check for if_nametoindex
-if_nametoindex_test = '''#include <net/if.h>
-int main(int argc, char *argv[]) {
-  (void) argc;
-  (void) argv;
-  if_nametoindex("lo");
-  return 0;
-}
-'''
-
-ifnametoindex_available = cc.compiles(if_nametoindex_test,
-                                      name : 'if_nametoindex is available')
+ifnametoindex_available = cc.has_function(
+    'if_nametoindex',
+    prefix : '#include <net/if.h>'
+)
 conf.set('HAVE_IFNAMETOINDEX', ifnametoindex_available)
 
 # Check for SIOCGIFINDEX
@@ -42,7 +38,7 @@ conf.set('HAVE_SIOCGIFINDEX', siocgifindex_available)
 
 configure_file(output : 'config.h', configuration : conf)
 
-add_global_arguments('-DHAVE_CONFIG_H=1', language : 'c')
+add_project_arguments('-DHAVE_CONFIG_H=1', language : 'c')
 
 system_deps = []
 
@@ -66,9 +62,9 @@ endif
 generic_unix = not bionic_available and host_machine.system() != 'windows'
 
 dependencies = [
-    dependency('glib-2.0', version : '>= 2.34'),
-    dependency('gobject-2.0', version : '>= 2.34'),
-    dependency('gio-2.0', version : '>= 2.34'),
+    dependency('glib-2.0', version : '>= 2.54'),
+    dependency('gobject-2.0', version : '>= 2.54'),
+    dependency('gio-2.0', version : '>= 2.54'),
     dependency('libsoup-2.4', version : '>= 2.26.1')
 ]
 

@@ -28,6 +28,7 @@
 
 #include <gio/gio.h>
 
+#include <libgssdp/gssdp-error.h>
 #include <libgssdp/gssdp-resource-browser.h>
 #include <libgssdp/gssdp-resource-group.h>
 #include <libgssdp/gssdp-protocol.h>
@@ -242,6 +243,9 @@ static void test_bgo682099 (void)
         g_idle_add (unref_object, browser);
         g_timeout_add_seconds (10, quit_loop, loop);
         g_main_loop_run (loop);
+        g_signal_handler_disconnect (browser, signal_id);
+        g_object_unref (browser);
+        g_main_loop_unref (loop);
 }
 
 /* END Regression test
@@ -362,11 +366,112 @@ static void test_bgo724030 (void)
                                       loop);
         g_main_loop_run (loop);  /* unavailable + available */
         g_main_loop_run (loop);  /* unavailable */
-        unref_object(browser);
+        g_signal_handler_disconnect (browser, available_signal_id);
+        g_object_unref (browser);
 }
 
 /* END Regression test
  * https://bugzilla.gnome.org/show_bug.cgi?id=724030
+ * ============================================================================
+ */
+
+/* BEGIN Regression test
+ * https://gitlab.gnome.org/GNOME/gssdp/issues/1
+ * ============================================================================
+ *  - Check that sending a message after clearing the custom headers does not
+ *    crash
+ */
+
+static void test_ggo_1(void)
+{
+        GSSDPClient *dest;
+        GSSDPResourceGroup *group;
+        GMainLoop *loop;
+        GError *error = NULL;
+
+        loop = g_main_loop_new (NULL, FALSE);
+        dest = get_client (&error);
+        g_assert_nonnull (dest);
+        g_assert_null (error);
+        gssdp_client_append_header (dest, "Foo", "bar");
+
+        group = gssdp_resource_group_new (dest);
+        g_assert_nonnull (group);
+
+        gssdp_resource_group_add_resource_simple (group,
+                                                  USN,
+                                                  UUID_1"::"USN,
+                                                  "http://127.0.0.1:3456");
+        gssdp_resource_group_set_max_age (group, 1);
+        gssdp_resource_group_set_available (group, TRUE);
+        g_timeout_add_seconds (2, quit_loop, loop);
+        g_main_loop_run (loop);
+
+        gssdp_client_clear_headers (dest);
+        g_object_unref (dest);
+        g_timeout_add_seconds (10, quit_loop, loop);
+        g_main_loop_run (loop);
+}
+
+/* END Regression test
+ * https://gitlab.gnome.org/GNOME/gssdp/issues/1
+ * ============================================================================
+ */
+
+/* BEGIN Regression test
+ * https://gitlab.gnome.org/GNOME/gssdp/issues/7
+ * ============================================================================
+ *  - Check that creating a GSSDPClient with interface and ip will have a set
+ *    network mask
+ */
+void test_ggo_7 () {
+        GError *error = NULL;
+
+
+
+        // Detect the name of the adapter belonging to 127.0.0.1
+        // Yes, this is awkward, but on Windows I believe the GUID is unique for
+        // the system, but not the same on every windows and *BSD is different to
+        // Linux as well (lo0 vs lo)
+        GSSDPClient *client = g_initable_new (GSSDP_TYPE_CLIENT,
+                                              NULL,
+                                              &error,
+                                              "host-ip", "127.0.0.1",
+                                              NULL);
+        g_assert_no_error (error);
+        g_assert_nonnull (client);
+
+        char *iface = g_strdup (gssdp_client_get_interface (client));
+        g_clear_object (&client);
+
+        g_debug("Found adapter %s for 127.0.0.1", iface);
+
+        // Check that trying to get a client for a non-existing interface fails
+        client = g_initable_new (GSSDP_TYPE_CLIENT,
+                                 NULL,
+                                 &error,
+                                 "host-ip", "127.0.0.1",
+                                 "interface", "ThisShouldNotExist",
+                                 NULL);
+        g_assert_error (error, GSSDP_ERROR, GSSDP_ERROR_FAILED);
+        g_assert_null (client);
+        g_clear_error (&error);
+
+        client = g_initable_new (GSSDP_TYPE_CLIENT,
+                                 NULL,
+                                 &error,
+                                 "host-ip", "127.0.0.1",
+                                 "interface", iface,
+                                 NULL);
+        g_assert_no_error (error);
+        g_assert_nonnull (client);
+        g_assert_nonnull (gssdp_client_get_address_mask (client));
+
+        g_free (iface);
+}
+
+/* END Regression test
+ * https://gitlab.gnome.org/GNOME/gssdp/issues/7
  * ============================================================================
  */
 
@@ -382,7 +487,9 @@ int main (int argc, char *argv[])
                g_test_add_func ("/bugs/gnome/673150", test_bgo673150);
                g_test_add_func ("/bugs/gnome/682099", test_bgo682099);
                g_test_add_func ("/bugs/gnome/724030", test_bgo724030);
+               g_test_add_func ("/bugs/ggo/1", test_ggo_1);
         }
+        g_test_add_func ("/bugs/ggo/7", test_ggo_7);
 
         g_test_run ();
 

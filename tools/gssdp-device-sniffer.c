@@ -29,6 +29,24 @@
 
 static char *interface = NULL;
 
+typedef enum {
+        PACKET_STORE_COLUMN_TIME,
+        PACKET_STORE_COLUMN_IP,
+        PACKET_STORE_COLUMN_INTERFACE,
+        PACKET_STORE_COLUMN_PACKET_TYPE,
+        PACKET_STORE_COLUMN_TARGET,
+        PACKET_STORE_COLUMN_HEADERS,
+        PACKET_STORE_COLUMN_RAW_ARRIVAL_TIME
+} PACKET_STORE_COLUMNS;
+
+typedef enum {
+        DEVICE_STORE_COLUMN_UUID,
+        DEVICE_STORE_COLUMN_FIRST_SEEN,
+        DEVICE_STORE_COLUMN_TYPE,
+        DEVICE_STORE_COLUMN_LOCATION
+} DEVICE_STORE_COLUMNS;
+
+
 GtkBuilder *builder;
 GSSDPResourceBrowser *resource_browser;
 GSSDPClient *client;
@@ -77,22 +95,11 @@ clear_packet_treeview (void)
 {
         GtkWidget *treeview;
         GtkTreeModel *model;
-        GtkTreeIter iter;
-        gboolean more;
-        time_t *arrival_time;
 
         treeview = GTK_WIDGET(gtk_builder_get_object (builder, "packet-treeview"));
         g_assert (treeview != NULL);
         model = gtk_tree_view_get_model (GTK_TREE_VIEW (treeview));
-        more = gtk_tree_model_get_iter_first (model, &iter);
-
-        while (more) {
-                gtk_tree_model_get (model,
-                                &iter, 
-                                5, &arrival_time, -1);
-                g_free (arrival_time);
-                more = gtk_list_store_remove (GTK_LIST_STORE (model), &iter);
-        }
+        gtk_list_store_clear (GTK_LIST_STORE (model));
 }
 
 static void
@@ -143,13 +150,16 @@ update_packet_details (const char *text, unsigned int len)
 }
 
 static void
-display_packet (time_t arrival_time, SoupMessageHeaders *packet_headers)
+display_packet (GDateTime *arrival_time, SoupMessageHeaders *packet_headers)
 {
         GString *text;
+        char *time = NULL;
 
-        text = g_string_new ("");
-        g_string_printf (text, "Received on: %s\nHeaders:\n\n",
-                        ctime (&arrival_time));
+        time = g_date_time_format_iso8601 (arrival_time);
+        text = g_string_new ("Received on: ");
+        g_string_append (text, time);
+        g_string_append (text, "\nHeaders:\n\n");
+        g_free (time);
 
         soup_message_headers_foreach (packet_headers,
                         (SoupMessageHeadersForeachFunc)
@@ -166,17 +176,21 @@ on_packet_selected (GtkTreeSelection      *selection,
 {
         GtkTreeModel *model;
         GtkTreeIter iter;
-        time_t *arrival_time;
+        GDateTime *arrival_time;
 
         if (gtk_tree_selection_get_selected (selection, &model, &iter)) {
                 SoupMessageHeaders *packet_headers;
 
                 gtk_tree_model_get (model,
-                                &iter, 
-                                5, &packet_headers,
-                                6, &arrival_time, -1);
-                display_packet (*arrival_time, packet_headers);
+                                    &iter,
+                                    PACKET_STORE_COLUMN_HEADERS,
+                                        &packet_headers,
+                                    PACKET_STORE_COLUMN_RAW_ARRIVAL_TIME,
+                                        &arrival_time,
+                                    -1);
+                display_packet (arrival_time, packet_headers);
                 g_boxed_free (SOUP_TYPE_MESSAGE_HEADERS, packet_headers);
+                g_date_time_unref (arrival_time);
         }
 
         else
@@ -187,26 +201,23 @@ static const char *message_types[] = {"M-SEARCH", "RESPONSE", "NOTIFY"};
 
 static char **
 packet_to_treeview_data (const gchar        *from_ip,
-                         time_t              arrival_time,
+                         GDateTime          *arrival_time,
                          _GSSDPMessageType   type,
                          SoupMessageHeaders *headers)
 {
         char **packet_data;
         const char *target;
-        struct tm *tm;
 
         packet_data = g_new0 (char *, 6);
 
         /* Set the Time */
-        tm = localtime (&arrival_time);
-        packet_data[0] = g_strdup_printf ("%02d:%02d", tm->tm_hour, tm->tm_min);
+        packet_data[0] = g_date_time_format (arrival_time, "%R");
 
         /* Now the Source Address */
         packet_data[1] = g_strdup (from_ip);
         
         packet_data[2] = g_strdup (gssdp_client_get_interface (client));
 
-        packet_data[3] = g_strdup ("lo");
         /* Now the Packet Type */
         packet_data[3] = g_strdup (message_types[type]);
         
@@ -224,7 +235,7 @@ packet_to_treeview_data (const gchar        *from_ip,
 
 static void
 append_packet (const gchar *from_ip,
-               time_t arrival_time,
+               GDateTime *arrival_time,
                _GSSDPMessageType type,
                SoupMessageHeaders *headers)
 {
@@ -240,17 +251,18 @@ append_packet (const gchar *from_ip,
         g_assert (liststore != NULL);
        
         packet_data = packet_to_treeview_data (from_ip,
-                        arrival_time,
-                        type,
-                        headers);
+                                               arrival_time,
+                                               type,
+                                               headers);
+
         gtk_list_store_insert_with_values (liststore, &iter, 0,
-                        0, packet_data[0],
-                        1, packet_data[1],
-                        2, packet_data[2],
-                        3, packet_data[3],
-                        4, packet_data[4],
-                        5, headers,
-                        6, g_memdup (&arrival_time, sizeof (time_t)),
+                        PACKET_STORE_COLUMN_TIME, packet_data[0],
+                        PACKET_STORE_COLUMN_IP, packet_data[1],
+                        PACKET_STORE_COLUMN_INTERFACE, packet_data[2],
+                        PACKET_STORE_COLUMN_PACKET_TYPE, packet_data[3],
+                        PACKET_STORE_COLUMN_TARGET, packet_data[4],
+                        PACKET_STORE_COLUMN_HEADERS, headers,
+                        PACKET_STORE_COLUMN_RAW_ARRIVAL_TIME, arrival_time,
                         -1);
         g_strfreev (packet_data);
 }
@@ -263,9 +275,7 @@ on_ssdp_message (G_GNUC_UNUSED GSSDPClient *ssdp_client,
                  SoupMessageHeaders        *headers,
                  G_GNUC_UNUSED gpointer     user_data)
 {
-        time_t arrival_time;
-        
-        arrival_time = time (NULL);
+        GDateTime *arrival_time;
      
         if (type == _GSSDP_DISCOVERY_REQUEST)
                 return;
@@ -274,7 +284,9 @@ on_ssdp_message (G_GNUC_UNUSED GSSDPClient *ssdp_client,
         if (!capture_packets) 
                 return;
 
+        arrival_time = g_date_time_new_now_local ();
         append_packet (from_ip, arrival_time, type, headers);
+        g_date_time_unref (arrival_time);
 }
 
 static gboolean 
@@ -287,8 +299,8 @@ find_device (GtkTreeModel *model, const char *uuid, GtkTreeIter *iter)
         while (more) {
                 char *device_uuid;
                 gtk_tree_model_get (model,
-                                iter, 
-                                0, &device_uuid, -1);
+                                    iter, 
+                                    0, &device_uuid, -1);
                 found = g_strcmp0 (device_uuid, uuid) == 0;
                 g_free (device_uuid);
 
@@ -318,14 +330,14 @@ append_device (const char *uuid,
         if (!find_device (model, uuid, &iter)) {
                 gtk_list_store_insert_with_values (GTK_LIST_STORE (model),
                                 &iter, 0,
-                                0, uuid,
-                                1, first_notify,
-                                3, location, -1);
+                                DEVICE_STORE_COLUMN_UUID, uuid,
+                                DEVICE_STORE_COLUMN_FIRST_SEEN, first_notify,
+                                DEVICE_STORE_COLUMN_LOCATION, location, -1);
         }
                 
         if (device_type) {
                 gtk_list_store_set (GTK_LIST_STORE (model), &iter,
-                                2, device_type, -1);
+                                DEVICE_STORE_COLUMN_TYPE, device_type, -1);
         }
 }
 
@@ -338,14 +350,12 @@ resource_available_cb (G_GNUC_UNUSED GSSDPResourceBrowser *ssdp_resource_browser
         char **usn_tokens;
         char *uuid;
         char *device_type = NULL;
-        time_t current_time;
-        struct tm *tm;
+        GDateTime *current_time = NULL;
         char *first_notify;
                 
-        current_time = time (NULL);
-        tm = localtime (&current_time);
-        first_notify = g_strdup_printf ("%02d:%02d",
-        tm->tm_hour, tm->tm_min);
+        current_time = g_date_time_new_now_local ();
+        first_notify = g_date_time_format (current_time, "%R");
+        g_date_time_unref (current_time);
 
         usn_tokens = g_strsplit (usn, "::", -1);
         g_assert (usn_tokens != NULL && usn_tokens[0] != NULL);
@@ -368,8 +378,7 @@ resource_available_cb (G_GNUC_UNUSED GSSDPResourceBrowser *ssdp_resource_browser
                        device_type,
                        (char *) locations->data);
         
-        if (device_type)
-                g_free (device_type);
+        g_free (device_type);
         g_free (first_notify);
         g_strfreev (usn_tokens);
 }
@@ -466,62 +475,6 @@ on_address_filter_dialog_response (GtkDialog             *dialog,
                 ip_filter = NULL;
 }
 
-static GtkTreeModel *
-create_packet_treemodel (void)
-{
-        GtkListStore *store;
-
-        store = gtk_list_store_new (7,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING,
-                        SOUP_TYPE_MESSAGE_HEADERS,
-                        G_TYPE_POINTER);
-
-        return GTK_TREE_MODEL (store);
-}
-
-static GtkTreeModel *
-create_device_treemodel (void)
-{
-        GtkListStore *store;
-
-        store = gtk_list_store_new (4,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING,
-                        G_TYPE_STRING);
-
-        return GTK_TREE_MODEL (store);
-}
-
-static void
-setup_treeview (GtkWidget *treeview,
-                GtkTreeModel *model,
-                const char *headers[])
-{
-        int i;
-
-        /* Set-up columns */
-        for (i=0; headers[i] != NULL; i++) {
-                GtkCellRenderer *renderer;
-               
-                renderer = gtk_cell_renderer_text_new ();
-                gtk_tree_view_insert_column_with_attributes (
-                                GTK_TREE_VIEW (treeview),
-                                -1,
-                                headers[i],
-                                renderer,
-                                "text", i,
-                                NULL);
-        }
-
-        gtk_tree_view_set_model (GTK_TREE_VIEW (treeview),
-                        model);
-}
-
 static gboolean
 on_treeview_popup_menu (GtkWidget *tv, GdkEventButton *event, gpointer user_data)
 {
@@ -535,49 +488,25 @@ on_treeview_popup_menu (GtkWidget *tv, GdkEventButton *event, gpointer user_data
 static void
 setup_treeviews (void)
 {
-        GtkWidget *treeviews[2];
-        GtkTreeModel *treemodels[2];
-        const char *headers[2][7] = { {"Time",
-                "Source Address",
-                "Interface",
-                "Packet Type",
-                "Packet Information",
-                NULL }, {"Unique Identifier",
-                "First Notify",
-                "Device Type",
-                "Location",
-                NULL } }; 
+        GtkWidget *treeview;
         GtkTreeSelection *selection;
         GtkWidget *menu = NULL;
-        int i;
 
-        treeviews[0] = GTK_WIDGET(gtk_builder_get_object (builder,
-                        "packet-treeview"));
-        g_assert (treeviews[0] != NULL);
-        treeviews[1] = GTK_WIDGET(gtk_builder_get_object (builder,
-                        "device-details-treeview"));
-        g_assert (treeviews[1] != NULL);
+        treeview = GTK_WIDGET(gtk_builder_get_object (builder,
+                                                      "packet-treeview"));
         
-        treemodels[0] = create_packet_treemodel ();
-        g_assert (treemodels[0] != NULL);
-        treemodels[1] = create_device_treemodel ();
-        g_assert (treemodels[1] != NULL);
-
-        for (i=0; i<2; i++)
-                setup_treeview (treeviews[i], treemodels[i], headers[i]);
-        
-        selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (treeviews[0]));
-        g_assert (selection != NULL);
+        selection = gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview));
         g_signal_connect (selection,
-                        "changed",
-                        G_CALLBACK (on_packet_selected),
-                        (gpointer *) treeviews[0]);
+                          "changed",
+                          G_CALLBACK (on_packet_selected),
+                          (gpointer *) treeview);
         menu = gtk_menu_new_from_model (G_MENU_MODEL (gtk_builder_get_object (builder,
                                                                               "sniffer-context-menu")));
-        gtk_menu_attach_to_widget (GTK_MENU (menu), treeviews[0], NULL);
-        g_signal_connect (G_OBJECT (treeviews[0]),
+        gtk_menu_attach_to_widget (GTK_MENU (menu), treeview, NULL);
+        g_signal_connect (G_OBJECT (treeview),
                           "button-press-event",
-                          G_CALLBACK (on_treeview_popup_menu), menu);
+                          G_CALLBACK (on_treeview_popup_menu),
+                          menu);
 }
 
 G_MODULE_EXPORT
@@ -621,7 +550,7 @@ on_set_address_filter (GSimpleAction *action,
         gtk_tree_selection_get_selected (selection, &model, &iter);
         g_free (ip_filter);
         gtk_tree_model_get (model, &iter,
-                        1, &ip_filter, -1);
+                        PACKET_STORE_COLUMN_IP, &ip_filter, -1);
         gtk_entry_set_text (GTK_ENTRY (gtk_builder_get_object (builder, "address-entry0")),
                             ip_filter);
 
@@ -748,7 +677,7 @@ init_upnp (void)
         client = g_initable_new (GSSDP_TYPE_CLIENT,
                                  NULL,
                                  &error,
-                                 "host-ip", prefer_v6 ? "::" : NULL,
+                                 "address-family", prefer_v6 ? G_SOCKET_FAMILY_IPV6 : G_SOCKET_FAMILY_IPV4,
                                  "interface", interface,
                                  NULL);
         if (error) {
@@ -791,6 +720,8 @@ deinit_upnp (void)
 gint
 main (gint argc, gchar *argv[])
 {
+        g_type_ensure (G_TYPE_DATE_TIME);
+
         if (!init_ui (&argc, &argv)) {
            return -2;
         }

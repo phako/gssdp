@@ -58,7 +58,13 @@ int
 gssdp_net_query_ifindex (GSSDPNetworkDevice *device)
 {
 #if defined(HAVE_IFNAMETOINDEX)
-    return if_nametoindex (device->iface_name);
+        errno = 0;
+        int index = if_nametoindex (device->iface_name);
+        if (index == 0 && errno != 0) {
+                return -1;
+        } else {
+                return index;
+        }
 
 #elif defined(HAVE_SIOCGIFINDEX)
     int fd;
@@ -209,7 +215,11 @@ gssdp_net_mac_lookup (GSSDPNetworkDevice *device, const char *ip_address)
                                 } else if (rtattr->rta_type == NDA_LLADDR) {
                                         g_clear_pointer (&data, g_free);
                                         data_length = RTA_PAYLOAD (rtattr);
+#if GLIB_CHECK_VERSION(2, 68, 0)
+                                        data = g_memdup2 (RTA_DATA (rtattr), data_length);
+#else
                                         data = g_memdup (RTA_DATA (rtattr), data_length);
+#endif
                                 }
 
                                 rtattr = RTA_NEXT (rtattr, rtattr_len);
@@ -250,6 +260,7 @@ out:
 #else
 char *
 gssdp_net_mac_lookup (GSSDPNetworkDevice *device, const char *ip_address)
+{
         return g_strdup (ip_address);
 }
 #endif
@@ -304,7 +315,7 @@ static GInetAddressMask *
 get_netmask (struct sockaddr *address,
              struct sockaddr *mask)
 {
-        static const guint8 bits_map[] = {
+        static const gint8 bits_map[] = {
                  0, -1, -1, -1,
                 -1, -1, -1, -1,
                  1, -1, -1, -1,
@@ -454,22 +465,24 @@ gssdp_net_get_host_ip (GSSDPNetworkDevice *device)
         /*
          * Now go through the devices we consider worthy
          */
-        family = G_SOCKET_FAMILY_INVALID;
+        family = device->address_family;
 
+        /* If we have an address, its family will take precendence.
+         * Otherwise take the family from the client's config
+         */
         if (device->host_addr) {
                 family = g_inet_address_get_family (device->host_addr);
-        }
-
-        if (family == G_SOCKET_FAMILY_IPV6 &&
-            !g_inet_address_get_is_link_local (device->host_addr) &&
-            !g_inet_address_get_is_site_local (device->host_addr) &&
-            !g_inet_address_get_is_loopback (device->host_addr)) {
-                char *addr = g_inet_address_to_string (device->host_addr);
-                /* FIXME: Discard the address, but use the interface */
-                g_warning("Invalid IP address given: %s, discarding",
-                          addr);
-                g_free (addr);
-                g_clear_object (&device->host_addr);
+                if (family == G_SOCKET_FAMILY_IPV6 &&
+                    !g_inet_address_get_is_link_local (device->host_addr) &&
+                    !g_inet_address_get_is_site_local (device->host_addr) &&
+                    !g_inet_address_get_is_loopback (device->host_addr)) {
+                        char *addr = g_inet_address_to_string (device->host_addr);
+                        /* FIXME: Discard the address, but use the interface */
+                        g_warning("Invalid IP address given: %s, discarding",
+                                        addr);
+                        g_free (addr);
+                        g_clear_object (&device->host_addr);
+                }
         }
 
         for (ifaceptr = up_ifaces;
@@ -539,8 +552,43 @@ gssdp_net_get_host_ip (GSSDPNetworkDevice *device)
                 break;
         }
 
+        if (device->host_addr != NULL) {
+                device->address_family = g_inet_address_get_family (device->host_addr);
+        }
+
         g_list_free (up_ifaces);
         freeifaddrs (ifa_list);
 
         return TRUE;
+}
+
+GList *
+gssdp_net_list_devices (void)
+{
+        struct ifaddrs *ifa_list, *ifa;
+        GHashTable *interfaces;
+        GList *result = NULL;
+
+        interfaces = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+
+        if (getifaddrs (&ifa_list) != 0) {
+                g_warning ("Failed to retrieve list of network interfaces: %s",
+                           strerror (errno));
+
+                goto out;
+        }
+
+        for (ifa = ifa_list; ifa != NULL; ifa = ifa->ifa_next) {
+                g_hash_table_add (interfaces, g_strdup (ifa->ifa_name));
+        }
+
+
+        freeifaddrs (ifa_list);
+
+out:
+        result = g_hash_table_get_keys (interfaces);
+        g_hash_table_steal_all (interfaces);
+        g_hash_table_destroy (interfaces);
+
+        return result;
 }

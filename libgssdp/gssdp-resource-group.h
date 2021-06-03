@@ -22,7 +22,7 @@
 #ifndef GSSDP_RESOURCE_GROUP_H
 #define GSSDP_RESOURCE_GROUP_H
 
-#include "gssdp-client.h"
+#include <libgssdp/gssdp-client.h>
 
 #include <glib-object.h>
 
@@ -88,6 +88,10 @@ gssdp_resource_group_add_resource_simple (GSSDPResourceGroup *resource_group,
 void
 gssdp_resource_group_remove_resource     (GSSDPResourceGroup *resource_group,
                                           guint               resource_id);
+
+void
+gssdp_resource_group_update              (GSSDPResourceGroup *resource_group,
+                                          guint               new_boot_id);
 
 G_END_DECLS
 

@@ -51,7 +51,7 @@ struct _GSSDPSocketSourcePrivate {
 
         GInetAddress         *address;
         char                 *device_name;
-        guint                 index;
+        gint                  index;
         guint                 ttl;
         guint                 port;
 };
@@ -140,7 +140,7 @@ gssdp_socket_source_set_property (GObject          *object,
                 priv->port = g_value_get_uint (value);
                 break;
         case PROP_IFA_IDX:
-                priv->index = g_value_get_uint (value);
+                priv->index = g_value_get_int (value);
                 break;
         default:
                 G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -229,6 +229,7 @@ gssdp_socket_source_do_init (GInitable                   *initable,
         g_socket_set_broadcast (priv->socket, TRUE);
 
         if (!gssdp_socket_enable_info (priv->socket,
+                                       family,
                                        TRUE,
                                        &inner_error)) {
                 g_propagate_prefixed_error (error,
@@ -256,20 +257,9 @@ gssdp_socket_source_do_init (GInitable                   *initable,
                 /* Enable multicast loopback */
                 g_socket_set_multicast_loopback (priv->socket, TRUE);
 
-                if (!gssdp_socket_mcast_interface_set (priv->socket,
-                                                       priv->address,
-                                                       (guint32) priv->index,
-                                                       &inner_error)) {
-                        g_propagate_prefixed_error (
-                                        error,
-                                        inner_error,
-                                        "Failed to set multicast interface");
-
-                        goto error;
-                }
 
 #ifdef G_OS_WIN32
-                bind_address = g_inet_socket_address_new (iface_address,
+                bind_address = g_inet_socket_address_new (priv->address,
                                                           SSDP_PORT);
 #else
                 bind_address = g_object_new (G_TYPE_INET_SOCKET_ADDRESS,
@@ -280,6 +270,22 @@ gssdp_socket_source_do_init (GInitable                   *initable,
 #endif
         } else {
                 guint port = SSDP_PORT;
+
+                if (family != G_SOCKET_FAMILY_IPV6 ||
+                    (!g_inet_address_get_is_loopback (priv->address))) {
+
+                        if (!gssdp_socket_mcast_interface_set (priv->socket,
+                                                priv->address,
+                                                (guint32) priv->index,
+                                                &inner_error)) {
+                                g_propagate_prefixed_error (
+                                                error,
+                                                inner_error,
+                                                "Failed to set multicast interface");
+
+                                goto error;
+                        }
+                }
 
                 /* Use user-supplied or random port for the socket source used
                  * by M-SEARCH */
@@ -523,12 +529,12 @@ gssdp_socket_source_class_init (GSSDPSocketSourceClass *klass)
         g_object_class_install_property
                 (object_class,
                  PROP_IFA_IDX,
-                 g_param_spec_uint
+                 g_param_spec_int
                         ("index",
                          "Interface index",
                          "Interface index of the network device",
-                         0, G_MAXUINT16,
-                         0,
+                         -1, G_MAXUINT16,
+                         -1,
                          G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY |
                          G_PARAM_STATIC_STRINGS));
 }
